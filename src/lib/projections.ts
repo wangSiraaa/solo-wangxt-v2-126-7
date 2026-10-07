@@ -12,6 +12,7 @@
 import {
   geoAzimuthalEquidistant,
   geoCircle,
+  geoContains,
   geoGraticule10,
   geoPath,
   geoStereographic
@@ -115,6 +116,30 @@ export function belowHorizonObject(nadirRa: number, nadirDec: number): object {
 /** 地平圈线对象（90° 球面圆的边界即地平圈） */
 export function horizonLineObject(nadirRa: number, nadirDec: number): object {
   return geoCircle().center([nadirRa, nadirDec]).radius(90).precision(0.05)();
+}
+
+/** 站点遮挡线（J2000 赤道坐标闭合采样折线），投影裁剪由 geoPath 完成 */
+export function occlusionLineObject(ring: Array<[number, number]>): object {
+  return { type: 'LineString', coordinates: ring };
+}
+
+/**
+ * 站点遮挡区域（遮挡线以下、含天底的球面多边形）。
+ * GeoJSON 球面多边形的内外由绕向决定，这里不硬编码绕向假设：
+ * 直接用 geoContains 校验天底是否在多边形内，不在则反转环。
+ */
+export function occlusionRegionObject(
+  ring: Array<[number, number]>,
+  nadirRa: number,
+  nadirDec: number
+): object {
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  const closed = first[0] === last[0] && first[1] === last[1] ? ring : [...ring, first];
+  const asPolygon = (coords: Array<[number, number]>) => ({ type: 'Polygon', coordinates: [coords] });
+  const poly = asPolygon(closed);
+  if (geoContains(poly as never, [nadirRa, nadirDec])) return poly;
+  return asPolygon([...closed].reverse());
 }
 
 /** 工具：供标注/标签计算坐标点 */

@@ -396,6 +396,32 @@ body,
   color: var(--red);
 }
 
+/* 被山体遮挡（几何地平以上但低于站点遮挡线） */
+.occ {
+  color: #ffb74d;
+}
+
+.profile-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+  align-items: end;
+  margin: 4px 0;
+}
+
+.profile-row label {
+  margin: 0;
+}
+
+.profile-preview {
+  width: 100%;
+  background: #0a1020;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  margin-top: 8px;
+  display: block;
+}
+
 .info-empty {
   color: var(--muted);
   line-height: 1.7;

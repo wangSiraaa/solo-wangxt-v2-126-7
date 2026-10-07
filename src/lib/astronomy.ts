@@ -153,18 +153,27 @@ export class SkyEpoch {
   }
 
   /**
-   * 地平圈上一点（方位角 azDeg，高度=0）对应的 J2000 赤经赤纬（度）。
-   * 用于在三维球面与二维投影上画出地平圈。
+   * 本地地平坐标（方位角 azDeg、高度 altDeg，度）对应的 J2000 赤经赤纬（度）。
+   * 用于把站点遮挡轮廓（方位→遮挡高度）采样到天球上以便绘制。
    */
-  horizonPointEquatorial(azDeg: number): { ra: number; dec: number } {
+  horizontalToEquatorial(azDeg: number, altDeg: number): { ra: number; dec: number } {
     // 地平直角：x=北 y=西 z=上；az 自北顺时针向东
     const az = (azDeg * Math.PI) / 180;
-    const hv = new Vector(Math.cos(az), -Math.sin(az), 0, this.time);
+    const alt = (altDeg * Math.PI) / 180;
+    const hv = new Vector(Math.cos(alt) * Math.cos(az), -Math.cos(alt) * Math.sin(az), Math.sin(alt), this.time);
     const ev = RotateVector(this.rHorToEqj, hv);
     const n = Math.hypot(ev.x, ev.y, ev.z) || 1;
     const ra = (((Math.atan2(ev.y / n, ev.x / n) * 180) / Math.PI) % 360 + 360) % 360;
     const dec = (Math.asin(Math.max(-1, Math.min(1, ev.z / n))) * 180) / Math.PI;
     return { ra, dec };
+  }
+
+  /**
+   * 地平圈上一点（方位角 azDeg，高度=0）对应的 J2000 赤经赤纬（度）。
+   * 用于在三维球面与二维投影上画出地平圈。
+   */
+  horizonPointEquatorial(azDeg: number): { ra: number; dec: number } {
+    return this.horizontalToEquatorial(azDeg, 0);
   }
 
   /**

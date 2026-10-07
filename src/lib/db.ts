@@ -1,12 +1,14 @@
-// IndexedDB 本地持久化：保存视场配置与天球坐标锚定的批注。
+// IndexedDB 本地持久化：保存视场配置、天球坐标锚定的批注，
+// 以及自定义台站的站点遮挡轮廓（人工输入的方位→遮挡高度控制点）。
 // 无后端；所有数据仅存于浏览器。Promise 风格的极简封装。
 
-import type { Annotation, SavedFov } from '../types';
+import type { Annotation, HorizonProfileRecord, SavedFov } from '../types';
 
 const DB_NAME = 'local-starchart';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_FOVS = 'fovs';
 const STORE_ANNOTATIONS = 'annotations';
+const STORE_PROFILES = 'horizonProfiles';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -21,6 +23,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_ANNOTATIONS)) {
         db.createObjectStore(STORE_ANNOTATIONS, { keyPath: 'uuid' });
+      }
+      if (!db.objectStoreNames.contains(STORE_PROFILES)) {
+        db.createObjectStore(STORE_PROFILES, { keyPath: 'siteId' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -65,4 +70,18 @@ export async function getAllAnnotations(): Promise<Annotation[]> {
 
 export async function deleteAnnotation(uuid: string): Promise<void> {
   await tx(STORE_ANNOTATIONS, 'readwrite', (s) => s.delete(uuid));
+}
+
+// ---- 站点遮挡轮廓（按台站 id 存取；人工输入，非地形实测） ----
+
+export async function putHorizonProfile(rec: HorizonProfileRecord): Promise<void> {
+  await tx(STORE_PROFILES, 'readwrite', (s) => s.put(rec));
+}
+
+export async function getAllHorizonProfiles(): Promise<HorizonProfileRecord[]> {
+  return tx<HorizonProfileRecord[]>(STORE_PROFILES, 'readonly', (s) => s.getAll());
+}
+
+export async function deleteHorizonProfile(siteId: string): Promise<void> {
+  await tx(STORE_PROFILES, 'readwrite', (s) => s.delete(siteId));
 }

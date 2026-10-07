@@ -46,10 +46,25 @@ export default function InfoPanel({ target, centerAlt, centerAz, gmstHours, juli
               <span className="sub">{azCompass(target.az)}方</span>
             </div>
             <div>
-              <label>地平高度 h</label>
-              <strong className={target.alt >= 0 ? 'up' : 'down'}>{target.alt.toFixed(2)}°</strong>
-              <span className="sub">{target.alt >= 0 ? '地平以上' : '地平以下'}</span>
+              <label>地平高度 h（几何地平 = 0°）</label>
+              <strong className={target.alt < 0 ? 'down' : target.occluded ? 'occ' : 'up'}>{target.alt.toFixed(2)}°</strong>
+              <span className="sub">
+                {target.alt < 0 ? '几何地平以下' : target.occluded ? '几何地平以上 · 被山体遮挡' : '几何地平以上'}
+              </span>
             </div>
+            {target.occlusionAlt !== null && (
+              <div>
+                <label>站点遮挡线高度（人工轮廓）</label>
+                <strong className={target.occluded ? 'occ' : 'up'}>{target.occlusionAlt.toFixed(2)}°</strong>
+                <span className="sub">
+                  {target.alt < 0
+                    ? '目标在几何地平以下'
+                    : target.occluded
+                      ? `目标低于遮挡线 ${(target.occlusionAlt - target.alt).toFixed(2)}°`
+                      : '目标高于遮挡线，未被遮挡'}
+                </span>
+              </div>
+            )}
             <div>
               <label>视星等</label>
               <strong>{target.mag.toFixed(2)}</strong>
@@ -69,7 +84,8 @@ export default function InfoPanel({ target, centerAlt, centerAz, gmstHours, juli
           点击球面视图或右侧任一投影图中的星点，即可在三种视图中定位同一目标。
           <ul>
             <li>圆形＝恒星，方形＝行星，菱形＝太阳/月球</li>
-            <li>绿色圆＝视场边界，红色线＝地平圈，蓝色虚线＝等角距参考环</li>
+            <li>绿色圆＝视场边界，红色线＝几何地平线，蓝色虚线＝等角距参考环</li>
+            <li>琥珀色线＝站点遮挡轮廓（人工输入，非地形实测）；仅配置了轮廓的自定义台站显示</li>
           </ul>
         </div>
       )}

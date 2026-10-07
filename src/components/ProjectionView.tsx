@@ -17,6 +17,8 @@ import {
   FOV_DISC_PX,
   graticuleObject,
   horizonLineObject,
+  occlusionLineObject,
+  occlusionRegionObject,
   projectPoint,
   sphericalCircle,
   VIEW_SIZE,
@@ -47,7 +49,7 @@ export default function ProjectionView(props: ProjectionViewProps) {
     [kind, fov.centerRa, fov.centerDec, fov.radiusDeg]
   );
 
-  // 经纬网 / 视场边界 / 地平圈 / 地平以下区域
+  // 经纬网 / 视场边界 / 地平圈 / 地平以下区域 / 站点遮挡线
   const paths = useMemo(() => {
     const grat = built.path(graticuleObject());
     // 参考角距环：真正等角距的同心球面小圆（投影后变形一目了然）
@@ -59,8 +61,13 @@ export default function ProjectionView(props: ProjectionViewProps) {
     const fovPath = built.path(sphericalCircle(fov.centerRa, fov.centerDec, fov.radiusDeg));
     const horizon = built.path(horizonLineObject(sky.horizon.nadirRa, sky.horizon.nadirDec));
     const below = built.path(belowHorizonObject(sky.horizon.nadirRa, sky.horizon.nadirDec));
-    return { grat, rings, fovPath, horizon, below };
-  }, [built, fov, sky.horizon.nadirRa, sky.horizon.nadirDec]);
+    // 站点遮挡（人工输入轮廓）：遮挡线 + 遮挡线以下区域（含天底）
+    const occLine = sky.occlusion ? built.path(occlusionLineObject(sky.occlusion.ring)) : '';
+    const occRegion = sky.occlusion
+      ? built.path(occlusionRegionObject(sky.occlusion.ring, sky.horizon.nadirRa, sky.horizon.nadirDec))
+      : '';
+    return { grat, rings, fovPath, horizon, below, occLine, occRegion };
+  }, [built, fov, sky.horizon.nadirRa, sky.horizon.nadirDec, sky.occlusion]);
 
   // 星点
   const markers = useMemo(() => {
@@ -144,12 +151,16 @@ export default function ProjectionView(props: ProjectionViewProps) {
             <path key={ring.rDeg} d={ring.d} fill="none" stroke="#3d6ea5" strokeWidth={0.7} strokeDasharray="2 3" />
           ))}
 
-          {/* 地平以下区域 + 地平圈 */}
+          {/* 站点遮挡区域（人工轮廓，琥珀色薄填）+ 地平以下区域 + 地平圈 + 遮挡线 */}
+          {showHorizon && sky.occlusion && <path d={paths.occRegion} fill="#ffb74d" opacity={0.16} />}
           {showHorizon && (
             <>
               <path d={paths.below} fill="#5a1f24" opacity={0.35} />
               <path d={paths.horizon} fill="none" stroke="#ff5d5d" strokeWidth={1.6} />
             </>
+          )}
+          {showHorizon && sky.occlusion && (
+            <path d={paths.occLine} fill="none" stroke="#ffb74d" strokeWidth={1.6} />
           )}
 
           {/* 视场边界（球面小圆投影后的轮廓） */}
@@ -184,11 +195,11 @@ export default function ProjectionView(props: ProjectionViewProps) {
                 {isSel && <circle r={r + 6} fill="none" stroke="#ffd54a" strokeWidth={2} />}
                 {isHover && !isSel && <circle r={r + 4} fill="none" stroke="#9fd0ff" strokeWidth={1.2} />}
                 {t.kind === 'star' ? (
-                  <circle r={r} fill={fill} opacity={below && !horizonClip ? 0.35 : 1} />
+                  <circle r={r} fill={fill} opacity={below && !horizonClip ? 0.35 : t.occluded ? 0.5 : 1} />
                 ) : t.kind === 'planet' ? (
-                  <rect x={-r} y={-r} width={r * 2} height={r * 2} fill={fill} />
+                  <rect x={-r} y={-r} width={r * 2} height={r * 2} fill={fill} opacity={t.occluded ? 0.5 : 1} />
                 ) : (
-                  <polygon points={`0,${-r} ${r},0 0,${r} ${-r},0`} fill={fill} />
+                  <polygon points={`0,${-r} ${r},0 0,${r} ${-r},0`} fill={fill} opacity={t.occluded ? 0.5 : 1} />
                 )}
               </g>
             );
@@ -229,6 +240,8 @@ export default function ProjectionView(props: ProjectionViewProps) {
         {selected && (
           <span className="proj-foot-sel">
             {selected.name}：距视场中心 {selected.sepFromCenter.toFixed(2)}°（球面角距）· 高度 {selected.alt.toFixed(1)}°
+            {selected.occlusionAlt !== null &&
+              ` · 遮挡线 ${selected.occlusionAlt.toFixed(1)}°${selected.occluded ? '（几何地平以上但被山体遮挡）' : ''}`}
           </span>
         )}
       </div>

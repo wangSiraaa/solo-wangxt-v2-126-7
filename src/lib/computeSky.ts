@@ -1,11 +1,13 @@
 // 天区计算：把静态星表与动态太阳系天体合并成统一目标列表，
 // 逐一计算本地地平坐标（astronomy-engine），并按
 // 「球面角距视场 / 星等 / 地平线」三条相互独立的条件筛选。
+// 若台站配置了人工遮挡轮廓，再额外判定「几何地平以上但被山体遮挡」状态。
 
 import { STAR_CATALOG, type CatalogStar } from '../data/catalog';
 import { SkyEpoch, type SolarSystemBodyInfo } from './astronomy';
 import { angularSeparation } from './geoMath';
-import type { FovConfig } from '../types';
+import { normalizePoints, sampleOcclusionAlt } from './horizonProfile';
+import type { FovConfig, HorizonPoint } from '../types';
 
 export interface SkyTarget {
   id: string;
@@ -25,6 +27,10 @@ export interface SkyTarget {
   inFov: boolean;
   passesMag: boolean;
   aboveHorizon: boolean;
+  /** 目标方位上的站点遮挡高度（度）；台站未配置轮廓时为 null */
+  occlusionAlt: number | null;
+  /** 几何地平以上、但低于站点遮挡线（被山体/建筑遮挡） */
+  occluded: boolean;
   tags: CatalogStar['tags'];
   phaseFraction?: number;
 }
@@ -39,9 +45,18 @@ export interface HorizonGeometry {
   cardinalPoints: Array<{ label: string; ra: number; dec: number }>;
 }
 
+export interface OcclusionGeometry {
+  /** 归一化后的控制点（方位升序，人工输入） */
+  points: HorizonPoint[];
+  /** 遮挡线在 J2000 赤道坐标上的闭合采样 [ra,dec]（度，末点=首点） */
+  ring: Array<[number, number]>;
+}
+
 export interface SkyModel {
   targets: SkyTarget[];
   horizon: HorizonGeometry;
+  /** 站点遮挡轮廓（人工输入）；未配置时为 null，行为与之前一致 */
+  occlusion: OcclusionGeometry | null;
   centerAlt: number;
   centerAz: number;
   gmstHours: number;
@@ -58,15 +73,18 @@ function kindOf(bodyName: SolarSystemBodyInfo['name']): SkyTarget['kind'] {
 /**
  * @param magLimit   星等上限（含），仅作用于恒星
  * @param horizonClip true 时只保留地平以上目标；与星等筛选相互独立
+ * @param profilePoints 站点遮挡轮廓控制点（人工输入）；null/空数组时保持原行为
  */
 export function computeSky(
   epoch: SkyEpoch,
   fov: FovConfig,
   magLimit: number,
   horizonClip: boolean,
-  fovBoundaryPts: Array<[number, number]>
+  fovBoundaryPts: Array<[number, number]>,
+  profilePoints: HorizonPoint[] | null = null
 ): SkyModel {
   const planets = epoch.solarSystemBodies();
+  const profile = profilePoints && profilePoints.length > 0 ? normalizePoints(profilePoints) : null;
 
   const targets: SkyTarget[] = [];
 
@@ -92,6 +110,8 @@ export function computeSky(
       inFov,
       passesMag: s.mag <= magLimit,
       aboveHorizon: above,
+      occlusionAlt: null,
+      occluded: false,
       tags: s.tags
     });
   }
@@ -119,6 +139,8 @@ export function computeSky(
       inFov,
       passesMag: true,
       aboveHorizon: above,
+      occlusionAlt: null,
+      occluded: false,
       tags: [],
       phaseFraction: p.phaseFraction
     });
@@ -145,9 +167,31 @@ export function computeSky(
     t.inFov = t.sepFromCenter <= fov.radiusDeg;
   }
 
+  // 站点遮挡：恒星与太阳系目标都沿用上面已有的地平坐标转换结果，
+  // 只在方位角上查轮廓。遮挡判定不影响三条筛选，只是状态标注。
+  let occlusion: OcclusionGeometry | null = null;
+  if (profile) {
+    for (const t of targets) {
+      const occAlt = sampleOcclusionAlt(profile, t.az);
+      t.occlusionAlt = occAlt;
+      t.occluded = t.alt >= 0 && t.alt < occAlt;
+    }
+    // 遮挡线采样到 J2000 天球（供二维投影绘制）；环形插值保证 0°=360° 同值
+    const occRing: Array<[number, number]> = [];
+    const M = 240;
+    for (let i = 0; i < M; i++) {
+      const az = (360 * i) / M;
+      const eq = epoch.horizontalToEquatorial(az, sampleOcclusionAlt(profile, az));
+      occRing.push([eq.ra, eq.dec]);
+    }
+    occRing.push(occRing[0]);
+    occlusion = { points: profile, ring: occRing };
+  }
+
   return {
     targets,
     horizon: { ring, nadirRa: nadir.ra, nadirDec: nadir.dec, cardinalPoints: cardinals },
+    occlusion,
     centerAlt: centerHz.altDeg,
     centerAz: centerHz.azDeg,
     gmstHours: epoch.gmstHours(),

@@ -37,3 +37,19 @@ export interface Annotation {
   text: string;
   color: string;
 }
+
+/** 站点遮挡轮廓控制点：方位角（度，北=0 顺时针）→ 遮挡高度（度） */
+export interface HorizonPoint {
+  az: number;
+  alt: number;
+}
+
+/**
+ * 存 IndexedDB 的站点遮挡轮廓记录。
+ * 注意：这是观测者人工输入的遮挡估计（山体/建筑等），不是地形实测数据。
+ */
+export interface HorizonProfileRecord {
+  siteId: string;
+  points: HorizonPoint[];
+  updatedAt: number;
+}

@@ -1,10 +1,11 @@
 // 控制面板：观测位置/时间、视场中心与角半径、星等与地平线独立筛选、
-// 演示场景、视场与批注的 IndexedDB 存取。
+// 演示场景、视场与批注的 IndexedDB 存取、自定义台站的站点遮挡轮廓编辑。
 
 import { useState } from 'react';
 import { OBSERVING_SITES } from '../data/sites';
 import { DEMO_SCENARIOS } from '../data/scenarios';
-import type { FovConfig, SavedFov, Annotation, SiteState } from '../types';
+import { normAz, sampleOcclusionAlt } from '../lib/horizonProfile';
+import type { FovConfig, SavedFov, Annotation, SiteState, HorizonPoint } from '../types';
 
 interface ControlsProps {
   site: SiteState;
@@ -16,6 +17,8 @@ interface ControlsProps {
   showGraticule: boolean;
   savedFovs: SavedFov[];
   annotations: Annotation[];
+  /** 当前台站的遮挡轮廓控制点（录入顺序，可为空数组） */
+  horizonProfile: HorizonPoint[];
   onChangeSite: (site: SiteState) => void;
   onChangeTime: (iso: string) => void;
   onChangeFov: (fov: FovConfig) => void;
@@ -29,7 +32,20 @@ interface ControlsProps {
   onDeleteFov: (uuid: string) => void;
   onAddAnnotation: (text: string, color: string) => void;
   onDeleteAnnotation: (uuid: string) => void;
+  onChangeProfile: (points: HorizonPoint[]) => void;
 }
+
+/** 山体示例轮廓：跨 0°/360° 方位（350°→15° 之间环形插值），便于验证连续性 */
+const SAMPLE_PROFILE: HorizonPoint[] = [
+  { az: 350, alt: 12 },
+  { az: 15, alt: 18 },
+  { az: 45, alt: 9 },
+  { az: 90, alt: 4 },
+  { az: 150, alt: 1 },
+  { az: 210, alt: 0 },
+  { az: 270, alt: 6 },
+  { az: 320, alt: 9 }
+];
 
 export default function Controls(p: ControlsProps) {
   const [fovName, setFovName] = useState('');
@@ -92,6 +108,76 @@ export default function Controls(p: ControlsProps) {
         </label>
         <p className="hint">北京时间 = UTC + 8 小时。默认 2026-09-30 13:00 UTC（北京 21:00，大角星近地平）。</p>
       </section>
+
+      {p.site.id === 'custom' && (
+        <section className="ctl-block">
+          <h3>站点遮挡轮廓（人工输入，非地形实测）</h3>
+          <p className="hint">
+            山地台站的真实地平线并非处处 0°：按方位角录入少量遮挡控制点，系统按方位环形线性插值
+            （0° 与 360° 同值、跨零点连续）。仅存本地 IndexedDB，换台站后自动重算遮挡状态。
+          </p>
+          {p.horizonProfile.map((pt, i) => (
+            <div className="profile-row" key={i}>
+              <label>
+                方位°
+                <input
+                  type="number"
+                  min={0}
+                  max={360}
+                  step={1}
+                  value={Number.isFinite(pt.az) ? pt.az : ''}
+                  onChange={(e) => {
+                    const next = p.horizonProfile.slice();
+                    next[i] = { ...pt, az: Number(e.target.value) };
+                    p.onChangeProfile(next);
+                  }}
+                />
+              </label>
+              <label>
+                遮挡高度°
+                <input
+                  type="number"
+                  min={-90}
+                  max={90}
+                  step={0.5}
+                  value={Number.isFinite(pt.alt) ? pt.alt : ''}
+                  onChange={(e) => {
+                    const next = p.horizonProfile.slice();
+                    next[i] = { ...pt, alt: Number(e.target.value) };
+                    p.onChangeProfile(next);
+                  }}
+                />
+              </label>
+              <button
+                className="x-btn"
+                title="删除该控制点"
+                onClick={() => p.onChangeProfile(p.horizonProfile.filter((_, k) => k !== i))}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <div className="btn-row">
+            <button
+              className="btn"
+              onClick={() => {
+                const last = p.horizonProfile[p.horizonProfile.length - 1];
+                const az = last ? (normAz(last.az) + 30) % 360 : 0;
+                p.onChangeProfile([...p.horizonProfile, { az, alt: 5 }]);
+              }}
+            >
+              添加控制点
+            </button>
+            <button className="btn" onClick={() => p.onChangeProfile(SAMPLE_PROFILE.map((x) => ({ ...x })))}>
+              填入山体示例
+            </button>
+            <button className="btn" disabled={p.horizonProfile.length === 0} onClick={() => p.onChangeProfile([])}>
+              清空轮廓
+            </button>
+          </div>
+          {p.horizonProfile.length > 0 && <ProfilePreview points={p.horizonProfile} />}
+        </section>
+      )}
 
       <section className="ctl-block">
         <h3>视场（J2000 赤道坐标）</h3>
@@ -183,4 +269,48 @@ export default function Controls(p: ControlsProps) {
 
 function round3(v: number): number {
   return Math.round(v * 1000) / 1000;
+}
+
+/**
+ * 轮廓预览：横轴方位 0°→360°，纵轴遮挡高度。
+ * 采样走完整的方位环，首尾同值，直观验证跨 0°/360° 连续。
+ */
+function ProfilePreview({ points }: { points: HorizonPoint[] }) {
+  const W = 252;
+  const H = 72;
+  const padL = 6;
+  const padR = 6;
+  const padT = 6;
+  const padB = 13;
+  const alts = points.map((pt) => pt.alt).filter(Number.isFinite);
+  const hi = Math.max(10, ...alts) * 1.12;
+  const lo = Math.min(0, ...alts);
+  const x = (az: number) => padL + (normAz(az) / 360) * (W - padL - padR);
+  const y = (alt: number) => padT + (1 - (alt - lo) / (hi - lo || 1)) * (H - padT - padB);
+  const samples: string[] = [];
+  for (let az = 0; az <= 360; az += 3) {
+    samples.push(`${x(az).toFixed(1)},${y(sampleOcclusionAlt(points, az)).toFixed(1)}`);
+  }
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="profile-preview">
+      {/* 几何地平线（0°） */}
+      <line x1={padL} x2={W - padR} y1={y(0)} y2={y(0)} stroke="#ff5d5d" strokeWidth={1} />
+      {/* 遮挡轮廓（环形插值采样） */}
+      <polyline points={samples.join(' ')} fill="none" stroke="#ffb74d" strokeWidth={1.6} />
+      {points.map((pt, i) =>
+        Number.isFinite(pt.az) && Number.isFinite(pt.alt) ? (
+          <circle key={i} cx={x(pt.az)} cy={y(pt.alt)} r={2.4} fill="#ffb74d" />
+        ) : null
+      )}
+      <text x={padL} y={H - 2} fontSize={8} fill="#93a5c8">
+        0° 北
+      </text>
+      <text x={W / 2} y={H - 2} fontSize={8} fill="#93a5c8" textAnchor="middle">
+        180° 南
+      </text>
+      <text x={W - padR} y={H - 2} fontSize={8} fill="#93a5c8" textAnchor="end">
+        360°（=0°，连续）
+      </text>
+    </svg>
+  );
 }

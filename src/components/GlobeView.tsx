@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import type { SkyModel, SkyTarget } from '../lib/computeSky';
 import type { FovConfig, Annotation } from '../types';
 import { DEG } from '../lib/geoMath';
+import { sampleOcclusionAlt } from '../lib/horizonProfile';
 
 interface GlobeViewProps {
   sky: SkyModel;
@@ -88,7 +89,8 @@ export default function GlobeView(props: GlobeViewProps) {
       <div className="globe-hint">
         拖拽旋转 · 滚轮缩放 · 点击星点定位（与右侧两图联动）
         <br />
-        地平坐标系：红圈=地平（N/E/S/W），绿圈=视场（角半径 {fov.radiusDeg.toFixed(1)}°），网格=J2000 赤道坐标
+        地平坐标系：红圈=几何地平（N/E/S/W），绿圈=视场（角半径 {fov.radiusDeg.toFixed(1)}°），网格=J2000 赤道坐标
+        {sky.occlusion ? ' · 琥珀色圈=站点遮挡轮廓（人工输入）' : ''}
         {horizonClip ? ' · 已开启地平线裁切' : ''}
       </div>
     </div>
@@ -115,6 +117,7 @@ class GlobeScene {
   private pointMaterial!: THREE.ShaderMaterial;
   private fovLine!: THREE.LineLoop;
   private horizonLine!: THREE.LineLoop;
+  private occlusionLine: THREE.LineLoop | null = null;
   private groundDisc!: THREE.Line;
   private graticuleGroup = new THREE.Group();
   private equatorLine: THREE.Line | null = null;
@@ -427,6 +430,8 @@ class GlobeScene {
       if (isSel) size *= 1.6;
       sizes.setX(i, size);
       const c = starColor(t);
+      // 几何地平以上但被山体遮挡的目标：调暗提示（不改变其坐标与筛选状态）
+      if (t.occluded) c.multiplyScalar(0.4);
       colors.setXYZ(i, c.r, c.g, c.b);
       shapes.setX(i, markerShape(t.kind) === 'circle' ? 0 : markerShape(t.kind) === 'square' ? 1 : 2);
       this.positionData.push({ id: t.id, vec: new THREE.Vector3(t.hx, t.hy, t.hz) });
@@ -444,6 +449,9 @@ class GlobeScene {
 
     // FOV 圆：直接在【地平坐标】里以视场中心地平向量为轴构造小圆
     this.rebuildFovCircle(props);
+
+    // 站点遮挡轮廓（人工输入）：地平坐标系里的琥珀色闭合线
+    this.rebuildOcclusionLine(props);
 
     // 格网
     this.graticuleGroup.visible = props.showGraticule;
@@ -516,6 +524,35 @@ class GlobeScene {
     this.scene.add(this.fovLine);
   }
 
+  private rebuildOcclusionLine(props: GlobeViewProps) {
+    if (this.occlusionLine) {
+      this.scene.remove(this.occlusionLine);
+      this.occlusionLine.geometry.dispose();
+      (this.occlusionLine.material as THREE.Material).dispose();
+      this.occlusionLine = null;
+    }
+    const occ = props.sky.occlusion;
+    if (!occ) return;
+    // 地平直角坐标：x=北 y=西 z=天顶；按方位环采样（0°=360° 环形插值连续）
+    const pts: THREE.Vector3[] = [];
+    const N = 240;
+    for (let i = 0; i < N; i++) {
+      const az = (360 * i) / N;
+      const alt = sampleOcclusionAlt(occ.points, az) * DEG;
+      const a = az * DEG;
+      pts.push(
+        new THREE.Vector3(Math.cos(alt) * Math.cos(a), -Math.cos(alt) * Math.sin(a), Math.sin(alt))
+          .normalize()
+          .multiplyScalar(SPHERE_R * 1.001)
+      );
+    }
+    this.occlusionLine = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: 0xffb74d })
+    );
+    this.scene.add(this.occlusionLine);
+  }
+
   private rebuildGraticuleContent(props: GlobeViewProps) {
     // 清空旧格网（保留 cardinal 标签在 labelsGroup）
     [...this.graticuleGroup.children].forEach((c) => {
@@ -583,6 +620,12 @@ class GlobeScene {
     cancelAnimationFrame(this.raf);
     this.cleanupEvents();
     this.resizeObs.disconnect();
+    if (this.occlusionLine) {
+      this.scene.remove(this.occlusionLine);
+      this.occlusionLine.geometry.dispose();
+      (this.occlusionLine.material as THREE.Material).dispose();
+      this.occlusionLine = null;
+    }
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

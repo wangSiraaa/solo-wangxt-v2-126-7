@@ -7,6 +7,8 @@ import {
   FOV_DISC_PX,
   graticuleObject,
   horizonLineObject,
+  occlusionLineObject,
+  occlusionRegionObject,
   sphericalCircle,
   VIEW_SIZE,
   type ProjectionKind
@@ -42,7 +44,8 @@ export function buildStandaloneSvg(
   const C = VIEW_SIZE / 2;
   const pad = 30;
   const headerH = 70;
-  const footerH = 92;
+  // 有站点遮挡轮廓时图注多一行说明
+  const footerH = sky.occlusion ? 110 : 92;
   const W = VIEW_SIZE + pad * 2;
   const H = VIEW_SIZE + pad * 2 + headerH + footerH;
   const x0 = pad;
@@ -57,6 +60,10 @@ export function buildStandaloneSvg(
   const fovPath = built.path(sphericalCircle(meta.fov.centerRa, meta.fov.centerDec, meta.fov.radiusDeg));
   const horizon = built.path(horizonLineObject(sky.horizon.nadirRa, sky.horizon.nadirDec));
   const below = built.path(belowHorizonObject(sky.horizon.nadirRa, sky.horizon.nadirDec));
+  const occLine = sky.occlusion ? built.path(occlusionLineObject(sky.occlusion.ring)) : '';
+  const occRegion = sky.occlusion
+    ? built.path(occlusionRegionObject(sky.occlusion.ring, sky.horizon.nadirRa, sky.horizon.nadirDec))
+    : '';
 
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -65,21 +72,23 @@ export function buildStandaloneSvg(
       const p = built.projection([t.ra, t.dec]);
       if (!p) return '';
       const rad = Math.max(1.6, Math.min(7, 6.2 - t.mag * 0.9));
+      // 被山体遮挡（几何地平以上但低于站点遮挡线）的目标降透明度绘出
+      const occOpacity = t.occluded ? 0.5 : 1;
       if (t.kind === 'star') {
         return `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${rad.toFixed(1)}" fill="#fff" opacity="${
-          !t.aboveHorizon ? 0.35 : 1
+          !t.aboveHorizon ? 0.35 : occOpacity
         }"/>`;
       }
       if (t.kind === 'planet') {
         return `<rect x="${(p[0] - rad).toFixed(1)}" y="${(p[1] - rad).toFixed(1)}" width="${(rad * 2).toFixed(1)}" height="${(
           rad * 2
-        ).toFixed(1)}" fill="#9ecbff"/>`;
+        ).toFixed(1)}" fill="#9ecbff" opacity="${occOpacity}"/>`;
       }
       return `<polygon points="${p[0].toFixed(1)},${(p[1] - rad).toFixed(1)} ${(p[0] + rad).toFixed(1)},${p[1].toFixed(
         1
       )} ${p[0].toFixed(1)},${(p[1] + rad).toFixed(1)} ${(p[0] - rad).toFixed(1)},${p[1].toFixed(1)}" fill="${
         t.kind === 'sun' ? '#ffd27d' : '#dfe6f2'
-      }"/>`;
+      }" opacity="${occOpacity}"/>`;
     })
     .join('');
 
@@ -119,8 +128,10 @@ export function buildStandaloneSvg(
 <g clip-path="url(#expdisc)">
 <path d="${grat}" fill="none" stroke="#27406a" stroke-width="0.6"/>
 ${rings.map((d) => `<path d="${d}" fill="none" stroke="#3d6ea5" stroke-width="0.7" stroke-dasharray="2 3"/>`).join('\n')}
+${sky.occlusion ? `<path d="${occRegion}" fill="#ffb74d" opacity="0.16"/>` : ''}
 <path d="${below}" fill="#5a1f24" opacity="0.35"/>
 <path d="${horizon}" fill="none" stroke="#ff5d5d" stroke-width="1.6"/>
+${sky.occlusion ? `<path d="${occLine}" fill="none" stroke="#ffb74d" stroke-width="1.6"/>` : ''}
 <path d="${fovPath}" fill="none" stroke="#57e389" stroke-width="1.4"/>
 ${starEls}
 ${labelEls}
@@ -132,6 +143,11 @@ ${annoEls}
 <text x="0" y="18">观测位置：${esc(meta.site.name)}（纬度 ${meta.site.latitude.toFixed(4)}°，经度 ${meta.site.longitude.toFixed(4)}°，海拔 ${meta.site.height} m）</text>
 <text x="0" y="36">筛选：星等 ≤ ${meta.magLimit}（仅恒星）；地平线裁切：${meta.horizonClip ? '开启（仅地平以上）' : '关闭（地平以下目标半透明显示）'}。地平坐标由 astronomy-engine Rotation_EQJ_HOR 转换，无大气折射改正。</text>
 <text x="0" y="54">角距均按球面（haversine）计算；图上像素距离不作为实际角距。太阳系天体坐标为含光行差的 J2000 视位置。星表为 J2000 近似值，仅供科普制图。</text>
+${
+  sky.occlusion
+    ? `<text x="0" y="72">站点遮挡轮廓：人工输入控制点 ${sky.occlusion.points.length} 个（非地形实测），按方位角环形线性插值（0°/360° 连续）。红色线＝几何地平线，琥珀色线＝站点遮挡线；被山体遮挡的目标以降透明度绘出。</text>`
+    : ''
+}
 </g>
 </svg>`;
 }
@@ -190,6 +206,14 @@ export function buildExportJson(sky: SkyModel, visibleTargets: SkyTarget[], anno
         angularRadius_deg: meta.fov.radiusDeg
       },
       filters: { magnitudeLimitStars: meta.magLimit, horizonClip: meta.horizonClip },
+      siteHorizonProfile: sky.occlusion
+        ? {
+            source: 'manual-entry',
+            note: '人工输入的方位-遮挡高度控制点，非地形实测；按方位角环形线性插值（0°/360° 连续）',
+            interpolation: 'circular-linear-by-azimuth',
+            controlPoints: sky.occlusion.points
+          }
+        : null,
       targets: visibleTargets.map((t) => ({
         id: t.id,
         name: t.name,
@@ -200,6 +224,9 @@ export function buildExportJson(sky: SkyModel, visibleTargets: SkyTarget[], anno
         magnitude: t.mag,
         azimuth_deg: Number(t.az.toFixed(3)),
         altitude_deg: Number(t.alt.toFixed(3)),
+        aboveGeometricHorizon: t.aboveHorizon,
+        terrainOcclusionAltitude_deg: t.occlusionAlt !== null ? Number(t.occlusionAlt.toFixed(3)) : null,
+        occludedByTerrain: t.occluded,
         angularSeparationFromCenter_deg: Number(t.sepFromCenter.toFixed(3))
       })),
       annotations
