@@ -12,7 +12,7 @@ import {
   type ProjectionKind
 } from './projections';
 import type { SkyModel, SkyTarget } from './computeSky';
-import type { FovConfig, SiteState, Annotation } from '../types';
+import type { FovConfig, SiteState, Annotation, HorizonProfile } from '../types';
 import { formatDec, formatRA } from './geoMath';
 
 export interface ExportMeta {
@@ -24,6 +24,8 @@ export interface ExportMeta {
   gmstHours: number;
   horizonClip: boolean;
   magLimit: number;
+  /** 当前台站的遮挡轮廓（人工输入）；null = 未配置 */
+  horizonProfile: HorizonProfile | null;
 }
 
 function fmtTime(iso: string): string {
@@ -57,6 +59,8 @@ export function buildStandaloneSvg(
   const fovPath = built.path(sphericalCircle(meta.fov.centerRa, meta.fov.centerDec, meta.fov.radiusDeg));
   const horizon = built.path(horizonLineObject(sky.horizon.nadirRa, sky.horizon.nadirDec));
   const below = built.path(belowHorizonObject(sky.horizon.nadirRa, sky.horizon.nadirDec));
+  // 站点遮挡线（人工输入轮廓，已采样到 J2000 赤道坐标）
+  const obstruction = sky.obstruction ? built.path({ type: 'LineString', coordinates: sky.obstruction.ring }) : '';
 
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -121,6 +125,7 @@ export function buildStandaloneSvg(
 ${rings.map((d) => `<path d="${d}" fill="none" stroke="#3d6ea5" stroke-width="0.7" stroke-dasharray="2 3"/>`).join('\n')}
 <path d="${below}" fill="#5a1f24" opacity="0.35"/>
 <path d="${horizon}" fill="none" stroke="#ff5d5d" stroke-width="1.6"/>
+${obstruction ? `<path d="${obstruction}" fill="none" stroke="#ffb74d" stroke-width="1.6" stroke-dasharray="6 3"/>` : ''}
 <path d="${fovPath}" fill="none" stroke="#57e389" stroke-width="1.4"/>
 ${starEls}
 ${labelEls}
@@ -132,6 +137,11 @@ ${annoEls}
 <text x="0" y="18">观测位置：${esc(meta.site.name)}（纬度 ${meta.site.latitude.toFixed(4)}°，经度 ${meta.site.longitude.toFixed(4)}°，海拔 ${meta.site.height} m）</text>
 <text x="0" y="36">筛选：星等 ≤ ${meta.magLimit}（仅恒星）；地平线裁切：${meta.horizonClip ? '开启（仅地平以上）' : '关闭（地平以下目标半透明显示）'}。地平坐标由 astronomy-engine Rotation_EQJ_HOR 转换，无大气折射改正。</text>
 <text x="0" y="54">角距均按球面（haversine）计算；图上像素距离不作为实际角距。太阳系天体坐标为含光行差的 J2000 视位置。星表为 J2000 近似值，仅供科普制图。</text>
+${
+  meta.horizonProfile
+    ? `<text x="0" y="72">站点遮挡轮廓（橙色虚线）：人工输入的 ${meta.horizonProfile.points.length} 个方位-高度控制点经环形插值得到，非地形实测数据，仅供遮挡判断参考。</text>`
+    : ''
+}
 </g>
 </svg>`;
 }
@@ -190,6 +200,14 @@ export function buildExportJson(sky: SkyModel, visibleTargets: SkyTarget[], anno
         angularRadius_deg: meta.fov.radiusDeg
       },
       filters: { magnitudeLimitStars: meta.magLimit, horizonClip: meta.horizonClip },
+      horizonProfile: meta.horizonProfile
+        ? {
+            source: 'manual-input',
+            note: '站点遮挡轮廓为人工输入的方位-高度控制点，按方位角环形插值（跨 0°/360° 连续）；非地形实测数据，仅供遮挡判断参考。',
+            siteId: meta.horizonProfile.siteId,
+            controlPoints: meta.horizonProfile.points.map((p) => ({ azimuth_deg: p.azDeg, obstructionAlt_deg: p.altDeg }))
+          }
+        : null,
       targets: visibleTargets.map((t) => ({
         id: t.id,
         name: t.name,
@@ -200,6 +218,13 @@ export function buildExportJson(sky: SkyModel, visibleTargets: SkyTarget[], anno
         magnitude: t.mag,
         azimuth_deg: Number(t.az.toFixed(3)),
         altitude_deg: Number(t.alt.toFixed(3)),
+        // 仅当台站配置了人工遮挡轮廓时给出遮挡高度与遮挡状态
+        ...(meta.horizonProfile && t.obstructionAlt !== undefined
+          ? {
+              terrainObstructionAlt_deg: Number(t.obstructionAlt.toFixed(3)),
+              occludedByTerrain: t.occludedByTerrain
+            }
+          : {}),
         angularSeparationFromCenter_deg: Number(t.sepFromCenter.toFixed(3))
       })),
       annotations

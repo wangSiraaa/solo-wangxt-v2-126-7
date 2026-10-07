@@ -17,10 +17,11 @@ import {
   downloadText,
   type ExportMeta
 } from './lib/exporter';
-import { deleteAnnotation, deleteFov, getAllAnnotations, getAllFovs, putAnnotation, putFov } from './lib/db';
+import { deleteAnnotation, deleteFov, deleteHorizonProfile, getAllAnnotations, getAllFovs, getAllHorizonProfiles, putAnnotation, putFov, putHorizonProfile } from './lib/db';
+import { normalizePoints } from './lib/horizonProfile';
 import { DEMO_SCENARIOS } from './data/scenarios';
 import { OBSERVING_SITES } from './data/sites';
-import type { Annotation, FovConfig, SavedFov, SiteState } from './types';
+import type { Annotation, FovConfig, HorizonControlPoint, HorizonProfile, SavedFov, SiteState } from './types';
 
 const DEFAULT_SITE: SiteState = OBSERVING_SITES[0];
 const DEFAULT_TIME = '2026-09-30T13:00:00Z';
@@ -43,11 +44,16 @@ export default function App() {
   const [focusToken, setFocusToken] = useState<{ id: string; nonce: number } | null>(null);
   const [savedFovs, setSavedFovs] = useState<SavedFov[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  /** 各台站的遮挡轮廓（人工输入），按台站 id 索引；未配置的台站保持原行为 */
+  const [profiles, setProfiles] = useState<Record<string, HorizonProfile>>({});
 
   // 初始载入 IndexedDB
   useEffect(() => {
     getAllFovs().then(setSavedFovs).catch(() => undefined);
     getAllAnnotations().then(setAnnotations).catch(() => undefined);
+    getAllHorizonProfiles()
+      .then((list) => setProfiles(Object.fromEntries(list.map((p) => [p.siteId, p]))))
+      .catch(() => undefined);
   }, []);
 
   // 历元（位置+时间）；SkyEpoch 内部调用 astronomy-engine 建旋转矩阵
@@ -59,10 +65,13 @@ export default function App() {
 
   const boundaryPts = useMemo(() => fovBoundary(fov.centerRa, fov.centerDec, fov.radiusDeg, 128), [fov]);
 
+  // 当前台站的遮挡轮廓控制点；换台站即换轮廓，遮挡状态随之重算
+  const profilePoints: HorizonControlPoint[] | null = profiles[site.id]?.points ?? null;
+
   const sky: SkyModel | null = useMemo(() => {
     if (!epoch) return null;
-    return computeSky(epoch, fov, magLimit, horizonClip, boundaryPts);
-  }, [epoch, fov, magLimit, horizonClip, boundaryPts]);
+    return computeSky(epoch, fov, magLimit, horizonClip, boundaryPts, profilePoints);
+  }, [epoch, fov, magLimit, horizonClip, boundaryPts, profilePoints]);
 
   const graticule = useMemo(() => epoch?.graticuleHorizontal(), [epoch]);
 
@@ -118,6 +127,21 @@ export default function App() {
   };
   const removeAnnotation = (id: string) => deleteAnnotation(id).then(() => getAllAnnotations().then(setAnnotations));
 
+  // 站点遮挡轮廓（人工输入）：保存到 IndexedDB，刷新后仍在
+  const saveProfile = (points: HorizonControlPoint[]) => {
+    const rec: HorizonProfile = { siteId: site.id, updatedAt: Date.now(), points: normalizePoints(points) };
+    setProfiles((prev) => ({ ...prev, [site.id]: rec }));
+    putHorizonProfile(rec).catch(() => undefined);
+  };
+  const clearProfile = () => {
+    setProfiles((prev) => {
+      const next = { ...prev };
+      delete next[site.id];
+      return next;
+    });
+    deleteHorizonProfile(site.id).catch(() => undefined);
+  };
+
   // 导出
   const exportMeta = (label: string): ExportMeta | null => {
     if (!sky) return null;
@@ -129,7 +153,8 @@ export default function App() {
       julianDay: sky.julianDay,
       gmstHours: sky.gmstHours,
       horizonClip,
-      magLimit
+      magLimit,
+      horizonProfile: profiles[site.id] ?? null
     };
   };
 
@@ -185,6 +210,7 @@ export default function App() {
             showGraticule={showGraticule}
             savedFovs={savedFovs}
             annotations={annotations}
+            horizonProfile={profiles[site.id] ?? null}
             onChangeSite={setSite}
             onChangeTime={setTimeIso}
             onChangeFov={setFov}
@@ -198,6 +224,8 @@ export default function App() {
             onDeleteFov={removeFov}
             onAddAnnotation={addAnnotation}
             onDeleteAnnotation={removeAnnotation}
+            onSaveProfile={saveProfile}
+            onClearProfile={clearProfile}
           />
         </aside>
 

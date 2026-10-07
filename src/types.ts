@@ -28,6 +28,22 @@ export interface SavedFov {
   note?: string;
 }
 
+/** 站点遮挡轮廓控制点：某方位角上的遮挡高度角（人工输入，非地形实测） */
+export interface HorizonControlPoint {
+  /** 方位角（度，北=0 顺时针），保存时归一化到 [0,360) */
+  azDeg: number;
+  /** 遮挡高度角（度），0 = 几何地平，越大遮挡越高 */
+  altDeg: number;
+}
+
+/** 某台站的遮挡轮廓：少量控制点 + 按方位角环形插值 */
+export interface HorizonProfile {
+  /** 对应台站 id（IndexedDB 主键） */
+  siteId: string;
+  updatedAt: number;
+  points: HorizonControlPoint[];
+}
+
 export interface Annotation {
   uuid: string;
   createdAt: number;

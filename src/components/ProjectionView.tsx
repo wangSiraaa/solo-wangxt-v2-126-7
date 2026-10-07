@@ -47,7 +47,7 @@ export default function ProjectionView(props: ProjectionViewProps) {
     [kind, fov.centerRa, fov.centerDec, fov.radiusDeg]
   );
 
-  // 经纬网 / 视场边界 / 地平圈 / 地平以下区域
+  // 经纬网 / 视场边界 / 地平圈 / 地平以下区域 / 站点遮挡线
   const paths = useMemo(() => {
     const grat = built.path(graticuleObject());
     // 参考角距环：真正等角距的同心球面小圆（投影后变形一目了然）
@@ -59,8 +59,13 @@ export default function ProjectionView(props: ProjectionViewProps) {
     const fovPath = built.path(sphericalCircle(fov.centerRa, fov.centerDec, fov.radiusDeg));
     const horizon = built.path(horizonLineObject(sky.horizon.nadirRa, sky.horizon.nadirDec));
     const below = built.path(belowHorizonObject(sky.horizon.nadirRa, sky.horizon.nadirDec));
-    return { grat, rings, fovPath, horizon, below };
-  }, [built, fov, sky.horizon.nadirRa, sky.horizon.nadirDec]);
+    // 站点遮挡线：方位环采样点已转到 J2000 赤道坐标，跨 0°/360° 连续；
+    // 与地平圈一样经 clipAngle 球面裁剪，赤经跨零点由 D3 切断
+    const obstruction = sky.obstruction
+      ? built.path({ type: 'LineString', coordinates: sky.obstruction.ring })
+      : '';
+    return { grat, rings, fovPath, horizon, below, obstruction };
+  }, [built, fov, sky.horizon.nadirRa, sky.horizon.nadirDec, sky.obstruction]);
 
   // 星点
   const markers = useMemo(() => {
@@ -144,11 +149,14 @@ export default function ProjectionView(props: ProjectionViewProps) {
             <path key={ring.rDeg} d={ring.d} fill="none" stroke="#3d6ea5" strokeWidth={0.7} strokeDasharray="2 3" />
           ))}
 
-          {/* 地平以下区域 + 地平圈 */}
+          {/* 地平以下区域 + 地平圈 + 站点遮挡线 */}
           {showHorizon && (
             <>
               <path d={paths.below} fill="#5a1f24" opacity={0.35} />
               <path d={paths.horizon} fill="none" stroke="#ff5d5d" strokeWidth={1.6} />
+              {sky.obstruction && (
+                <path d={paths.obstruction} fill="none" stroke="#ffb74d" strokeWidth={1.6} strokeDasharray="6 3" />
+              )}
             </>
           )}
 
@@ -168,6 +176,9 @@ export default function ProjectionView(props: ProjectionViewProps) {
             const isSel = t.id === props.selectedId;
             const isHover = t.id === props.hoverId;
             const below = !t.aboveHorizon;
+            const occluded = t.occludedByTerrain;
+            // 恒星沿用原有的"地平以下半透明"；被站点遮挡的目标统一再压暗一档
+            const dim = occluded ? 0.55 : t.kind === 'star' && below && !horizonClip ? 0.35 : 1;
             const fill =
               t.kind === 'sun' ? '#ffd27d' : t.kind === 'moon' ? '#dfe6f2' : t.kind === 'planet' ? '#9ecbff' : '#ffffff';
             return (
@@ -181,14 +192,15 @@ export default function ProjectionView(props: ProjectionViewProps) {
                   props.onSelect(t.id);
                 }}
               >
+                {occluded && <title>{`${t.name}：几何地平以上但被站点遮挡（遮挡线 ${t.obstructionAlt!.toFixed(1)}°）`}</title>}
                 {isSel && <circle r={r + 6} fill="none" stroke="#ffd54a" strokeWidth={2} />}
                 {isHover && !isSel && <circle r={r + 4} fill="none" stroke="#9fd0ff" strokeWidth={1.2} />}
                 {t.kind === 'star' ? (
-                  <circle r={r} fill={fill} opacity={below && !horizonClip ? 0.35 : 1} />
+                  <circle r={r} fill={fill} opacity={dim} />
                 ) : t.kind === 'planet' ? (
-                  <rect x={-r} y={-r} width={r * 2} height={r * 2} fill={fill} />
+                  <rect x={-r} y={-r} width={r * 2} height={r * 2} fill={fill} opacity={dim} />
                 ) : (
-                  <polygon points={`0,${-r} ${r},0 0,${r} ${-r},0`} fill={fill} />
+                  <polygon points={`0,${-r} ${r},0 0,${r} ${-r},0`} fill={fill} opacity={dim} />
                 )}
               </g>
             );
@@ -229,6 +241,10 @@ export default function ProjectionView(props: ProjectionViewProps) {
         {selected && (
           <span className="proj-foot-sel">
             {selected.name}：距视场中心 {selected.sepFromCenter.toFixed(2)}°（球面角距）· 高度 {selected.alt.toFixed(1)}°
+            {selected.obstructionAlt !== undefined &&
+              (selected.occludedByTerrain
+                ? ` · ⚠ 被站点遮挡（遮挡线 ${selected.obstructionAlt.toFixed(1)}°）`
+                : ' · 高于站点遮挡线')}
           </span>
         )}
       </div>

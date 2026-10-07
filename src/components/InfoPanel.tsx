@@ -50,6 +50,19 @@ export default function InfoPanel({ target, centerAlt, centerAz, gmstHours, juli
               <strong className={target.alt >= 0 ? 'up' : 'down'}>{target.alt.toFixed(2)}°</strong>
               <span className="sub">{target.alt >= 0 ? '地平以上' : '地平以下'}</span>
             </div>
+            {target.obstructionAlt !== undefined && (
+              <div>
+                <label>站点遮挡线（人工输入）</label>
+                <strong className={target.occludedByTerrain ? 'down' : 'up'}>{target.obstructionAlt.toFixed(2)}°</strong>
+                <span className="sub">
+                  {target.alt < 0
+                    ? '目标在几何地平以下'
+                    : target.occludedByTerrain
+                      ? '⚠ 几何地平以上但被山体遮挡'
+                      : '高于遮挡线，未被遮挡'}
+                </span>
+              </div>
+            )}
             <div>
               <label>视星等</label>
               <strong>{target.mag.toFixed(2)}</strong>
@@ -69,7 +82,8 @@ export default function InfoPanel({ target, centerAlt, centerAz, gmstHours, juli
           点击球面视图或右侧任一投影图中的星点，即可在三种视图中定位同一目标。
           <ul>
             <li>圆形＝恒星，方形＝行星，菱形＝太阳/月球</li>
-            <li>绿色圆＝视场边界，红色线＝地平圈，蓝色虚线＝等角距参考环</li>
+            <li>绿色圆＝视场边界，红色线＝几何地平圈，蓝色虚线＝等角距参考环</li>
+            <li>橙色虚线＝站点遮挡轮廓（人工输入，未配置轮廓的台站不显示）</li>
           </ul>
         </div>
       )}

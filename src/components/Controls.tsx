@@ -4,7 +4,8 @@
 import { useState } from 'react';
 import { OBSERVING_SITES } from '../data/sites';
 import { DEMO_SCENARIOS } from '../data/scenarios';
-import type { FovConfig, SavedFov, Annotation, SiteState } from '../types';
+import { MAX_OBSTRUCTION_ALT, MIN_OBSTRUCTION_ALT } from '../lib/horizonProfile';
+import type { FovConfig, HorizonControlPoint, HorizonProfile, SavedFov, Annotation, SiteState } from '../types';
 
 interface ControlsProps {
   site: SiteState;
@@ -16,6 +17,8 @@ interface ControlsProps {
   showGraticule: boolean;
   savedFovs: SavedFov[];
   annotations: Annotation[];
+  /** 当前台站的遮挡轮廓（人工输入）；null = 未配置，保持原行为 */
+  horizonProfile: HorizonProfile | null;
   onChangeSite: (site: SiteState) => void;
   onChangeTime: (iso: string) => void;
   onChangeFov: (fov: FovConfig) => void;
@@ -29,6 +32,8 @@ interface ControlsProps {
   onDeleteFov: (uuid: string) => void;
   onAddAnnotation: (text: string, color: string) => void;
   onDeleteAnnotation: (uuid: string) => void;
+  onSaveProfile: (points: HorizonControlPoint[]) => void;
+  onClearProfile: () => void;
 }
 
 export default function Controls(p: ControlsProps) {
@@ -151,6 +156,75 @@ export default function Controls(p: ControlsProps) {
       </section>
 
       <section className="ctl-block">
+        <h3>站点遮挡轮廓（人工输入）</h3>
+        {p.horizonProfile ? (
+          <>
+            <ul className="store-list profile-list">
+              {p.horizonProfile.points.map((pt, i) => (
+                <li key={i}>
+                  <label className="profile-field">
+                    方位°
+                    <input
+                      type="number"
+                      min={0}
+                      max={360}
+                      step={1}
+                      value={round3(pt.azDeg)}
+                      onChange={(e) => updatePoint(p, i, { azDeg: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label className="profile-field">
+                    遮挡高°
+                    <input
+                      type="number"
+                      min={MIN_OBSTRUCTION_ALT}
+                      max={MAX_OBSTRUCTION_ALT}
+                      step={0.5}
+                      value={round3(pt.altDeg)}
+                      onChange={(e) => updatePoint(p, i, { altDeg: Number(e.target.value) })}
+                    />
+                  </label>
+                  <button
+                    className="x-btn"
+                    title="删除该控制点"
+                    onClick={() => {
+                      const pts = p.horizonProfile!.points;
+                      // 删到最后一个点时直接清除轮廓，回到"未配置"状态
+                      if (pts.length <= 1) p.onClearProfile();
+                      else p.onSaveProfile(pts.filter((_, k) => k !== i));
+                    }}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="btn-row" style={{ marginTop: 6 }}>
+              <button className="btn" onClick={() => addPoint(p)}>
+                + 控制点
+              </button>
+              <button className="btn" onClick={p.onClearProfile}>
+                清除轮廓
+              </button>
+            </div>
+            <p className="hint">
+              控制点按方位角环形线性插值（跨 0°/360° 连续），橙色虚线即遮挡线。
+              轮廓为人工输入而非地形实测，仅存于本台站（{p.site.name}），换台站后遮挡状态按各自轮廓重算。
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="hint">
+              当前台站（{p.site.name}）未配置遮挡轮廓，仅使用几何地平线（高度 0°），行为与之前一致。
+            </p>
+            <button className="btn" onClick={() => p.onSaveProfile(DEFAULT_PROFILE_POINTS)}>
+              新建遮挡轮廓
+            </button>
+          </>
+        )}
+      </section>
+
+      <section className="ctl-block">
         <h3>批注（绑定天球坐标，存 IndexedDB）</h3>
         <div className="save-row">
           <input type="color" value={noteColor} onChange={(e) => setNoteColor(e.target.value)} />
@@ -183,4 +257,44 @@ export default function Controls(p: ControlsProps) {
 
 function round3(v: number): number {
   return Math.round(v * 1000) / 1000;
+}
+
+/** 新建轮廓时的默认控制点（人工示例值，可逐点编辑） */
+const DEFAULT_PROFILE_POINTS: HorizonControlPoint[] = [
+  { azDeg: 0, altDeg: 5 },
+  { azDeg: 90, altDeg: 12 },
+  { azDeg: 180, altDeg: 4 },
+  { azDeg: 270, altDeg: 18 }
+];
+
+/** 修改第 i 个控制点并保存（非法输入忽略，保持上次的值） */
+function updatePoint(p: ControlsProps, i: number, patch: Partial<HorizonControlPoint>) {
+  const pts = p.horizonProfile!.points.map((pt, k) => (k === i ? { ...pt, ...patch } : pt));
+  const changed = pts[i];
+  if (!Number.isFinite(changed.azDeg) || !Number.isFinite(changed.altDeg)) return;
+  p.onSaveProfile(pts);
+}
+
+/** 在最大方位间隔的中点处插入新控制点，高度取两端插值 */
+function addPoint(p: ControlsProps) {
+  const pts = p.horizonProfile!.points;
+  if (pts.length === 0) {
+    p.onSaveProfile([{ azDeg: 0, altDeg: 5 }]);
+    return;
+  }
+  const sorted = [...pts].sort((a, b) => a.azDeg - b.azDeg);
+  let bestGap = -1;
+  let bestIdx = 0;
+  for (let k = 0; k < sorted.length; k++) {
+    const a = sorted[k].azDeg;
+    const b = k + 1 < sorted.length ? sorted[k + 1].azDeg : sorted[0].azDeg + 360;
+    if (b - a > bestGap) {
+      bestGap = b - a;
+      bestIdx = k;
+    }
+  }
+  const a = sorted[bestIdx];
+  const b = bestIdx + 1 < sorted.length ? sorted[bestIdx + 1] : { azDeg: sorted[0].azDeg + 360, altDeg: sorted[0].altDeg };
+  const newPt: HorizonControlPoint = { azDeg: (a.azDeg + b.azDeg) / 2, altDeg: (a.altDeg + b.altDeg) / 2 };
+  p.onSaveProfile([...pts, newPt]);
 }

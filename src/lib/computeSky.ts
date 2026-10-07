@@ -4,8 +4,9 @@
 
 import { STAR_CATALOG, type CatalogStar } from '../data/catalog';
 import { SkyEpoch, type SolarSystemBodyInfo } from './astronomy';
-import { angularSeparation } from './geoMath';
-import type { FovConfig } from '../types';
+import { angularSeparation, DEG } from './geoMath';
+import { hasProfile, sampleObstructionAlt, sampleProfileRing } from './horizonProfile';
+import type { FovConfig, HorizonControlPoint } from '../types';
 
 export interface SkyTarget {
   id: string;
@@ -25,6 +26,10 @@ export interface SkyTarget {
   inFov: boolean;
   passesMag: boolean;
   aboveHorizon: boolean;
+  /** 目标方位上的站点遮挡高度（度）；当前台站未配置轮廓时为 undefined */
+  obstructionAlt?: number;
+  /** 几何地平以上但被站点遮挡（仅当配置了轮廓才可能为 true） */
+  occludedByTerrain: boolean;
   tags: CatalogStar['tags'];
   phaseFraction?: number;
 }
@@ -42,11 +47,20 @@ export interface HorizonGeometry {
 export interface SkyModel {
   targets: SkyTarget[];
   horizon: HorizonGeometry;
+  /** 站点遮挡轮廓（当前台站已配置时）：J2000 赤道坐标环 + 地平直角向量环 */
+  obstruction: ObstructionGeometry | null;
   centerAlt: number;
   centerAz: number;
   gmstHours: number;
   julianDay: number;
   fovBoundary: Array<[number, number]>;
+}
+
+export interface ObstructionGeometry {
+  /** 遮挡线在 J2000 赤道坐标上的密集采样 [ra,dec]（度），首尾闭合 */
+  ring: Array<[number, number]>;
+  /** 遮挡线在本地地平直角坐标中的单位向量采样（x=北 y=西 z=天顶） */
+  ringHorizontal: Array<[number, number, number]>;
 }
 
 function kindOf(bodyName: SolarSystemBodyInfo['name']): SkyTarget['kind'] {
@@ -58,15 +72,26 @@ function kindOf(bodyName: SolarSystemBodyInfo['name']): SkyTarget['kind'] {
 /**
  * @param magLimit   星等上限（含），仅作用于恒星
  * @param horizonClip true 时只保留地平以上目标；与星等筛选相互独立
+ * @param obstructionPoints 当前台站的遮挡轮廓控制点（人工输入）；null/空 = 未配置，保持原行为
  */
 export function computeSky(
   epoch: SkyEpoch,
   fov: FovConfig,
   magLimit: number,
   horizonClip: boolean,
-  fovBoundaryPts: Array<[number, number]>
+  fovBoundaryPts: Array<[number, number]>,
+  obstructionPoints: HorizonControlPoint[] | null = null
 ): SkyModel {
   const planets = epoch.solarSystemBodies();
+  const profileOn = hasProfile(obstructionPoints);
+
+  // 目标在本地平坐标下的遮挡判定：恒星与太阳系天体走同一套坐标转换与同一轮廓
+  const obstructionAt = (azDeg: number, altDeg: number): { obstructionAlt?: number; occludedByTerrain: boolean } => {
+    if (!profileOn) return { occludedByTerrain: false };
+    const obs = sampleObstructionAlt(obstructionPoints!, azDeg);
+    if (obs === null) return { occludedByTerrain: false };
+    return { obstructionAlt: obs, occludedByTerrain: altDeg >= 0 && altDeg < obs };
+  };
 
   const targets: SkyTarget[] = [];
 
@@ -92,6 +117,7 @@ export function computeSky(
       inFov,
       passesMag: s.mag <= magLimit,
       aboveHorizon: above,
+      ...obstructionAt(hz.azDeg, hz.altDeg),
       tags: s.tags
     });
   }
@@ -119,6 +145,7 @@ export function computeSky(
       inFov,
       passesMag: true,
       aboveHorizon: above,
+      ...obstructionAt(hz.azDeg, hz.altDeg),
       tags: [],
       phaseFraction: p.phaseFraction
     });
@@ -140,6 +167,24 @@ export function computeSky(
   const nadir = epoch.nadirEquatorial();
   const centerHz = epoch.equatorialToHorizontal(fov.centerRa, fov.centerDec);
 
+  // 站点遮挡轮廓：沿方位环采样（跨 0°/360° 连续），同时给出
+  // J2000 赤道坐标（二维投影用）与地平直角向量（三维球面用）。
+  // 坐标转换沿用 SkyEpoch 的同一旋转矩阵，与目标位置口径一致。
+  let obstruction: ObstructionGeometry | null = null;
+  if (profileOn) {
+    const samples = sampleProfileRing(obstructionPoints!, 240)!;
+    const obsRing: Array<[number, number]> = [];
+    const obsRingHor: Array<[number, number, number]> = [];
+    for (const s of samples) {
+      const eq = epoch.horizontalToEquatorial(s.azDeg, s.altDeg);
+      obsRing.push([eq.ra, eq.dec]);
+      const az = s.azDeg * DEG;
+      const alt = s.altDeg * DEG;
+      obsRingHor.push([Math.cos(alt) * Math.cos(az), -Math.cos(alt) * Math.sin(az), Math.sin(alt)]);
+    }
+    obstruction = { ring: obsRing, ringHorizontal: obsRingHor };
+  }
+
   // 标记可见性：三条筛选独立，但必须同时满足才绘制
   for (const t of targets) {
     t.inFov = t.sepFromCenter <= fov.radiusDeg;
@@ -148,6 +193,7 @@ export function computeSky(
   return {
     targets,
     horizon: { ring, nadirRa: nadir.ra, nadirDec: nadir.dec, cardinalPoints: cardinals },
+    obstruction,
     centerAlt: centerHz.altDeg,
     centerAz: centerHz.azDeg,
     gmstHours: epoch.gmstHours(),

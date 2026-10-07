@@ -88,7 +88,8 @@ export default function GlobeView(props: GlobeViewProps) {
       <div className="globe-hint">
         拖拽旋转 · 滚轮缩放 · 点击星点定位（与右侧两图联动）
         <br />
-        地平坐标系：红圈=地平（N/E/S/W），绿圈=视场（角半径 {fov.radiusDeg.toFixed(1)}°），网格=J2000 赤道坐标
+        地平坐标系：红圈=几何地平（N/E/S/W），绿圈=视场（角半径 {fov.radiusDeg.toFixed(1)}°），网格=J2000 赤道坐标
+        {sky.obstruction ? ' · 橙环=站点遮挡轮廓（人工输入）' : ''}
         {horizonClip ? ' · 已开启地平线裁切' : ''}
       </div>
     </div>
@@ -115,6 +116,7 @@ class GlobeScene {
   private pointMaterial!: THREE.ShaderMaterial;
   private fovLine!: THREE.LineLoop;
   private horizonLine!: THREE.LineLoop;
+  private obstructionLine: THREE.LineLoop | null = null;
   private groundDisc!: THREE.Line;
   private graticuleGroup = new THREE.Group();
   private equatorLine: THREE.Line | null = null;
@@ -445,6 +447,9 @@ class GlobeScene {
     // FOV 圆：直接在【地平坐标】里以视场中心地平向量为轴构造小圆
     this.rebuildFovCircle(props);
 
+    // 站点遮挡轮廓（人工输入）：地平坐标系中的闭合线环
+    this.rebuildObstruction(props);
+
     // 格网
     this.graticuleGroup.visible = props.showGraticule;
     this.rebuildGraticuleContent(props);
@@ -514,6 +519,23 @@ class GlobeScene {
       new THREE.LineBasicMaterial({ color: 0x57e389 })
     );
     this.scene.add(this.fovLine);
+  }
+
+  /** 站点遮挡轮廓线（橙色闭合环）：数据来自 computeSky 的地平直角向量采样 */
+  private rebuildObstruction(props: GlobeViewProps) {
+    if (this.obstructionLine) {
+      this.scene.remove(this.obstructionLine);
+      this.obstructionLine.geometry.dispose();
+      this.obstructionLine = null;
+    }
+    const ring = props.sky.obstruction?.ringHorizontal;
+    if (!ring || ring.length < 3) return;
+    const pts = ring.map(([x, y, z]) => new THREE.Vector3(x, y, z).multiplyScalar(SPHERE_R * 1.001));
+    this.obstructionLine = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: 0xffb74d })
+    );
+    this.scene.add(this.obstructionLine);
   }
 
   private rebuildGraticuleContent(props: GlobeViewProps) {

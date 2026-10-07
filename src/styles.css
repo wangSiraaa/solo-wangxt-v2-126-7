@@ -212,6 +212,16 @@ body,
   display: inline-block;
 }
 
+.profile-list li {
+  gap: 8px;
+}
+
+.profile-field {
+  flex: 1;
+  margin: 0 !important;
+  font-size: 11px !important;
+}
+
 .check {
   display: flex !important;
   align-items: center;
